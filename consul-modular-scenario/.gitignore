@@ -1,0 +1,8 @@
+bin/
+certs/
+secrets/
+config/
+logs/
+opt/
+*.sh
+!provision.sh

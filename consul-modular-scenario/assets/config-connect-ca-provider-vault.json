@@ -1,0 +1,14 @@
+{
+    "Provider": "vault",
+    "Config": {
+        "LeafCertTTL": "1h",
+        "Address": "http://172.19.0.2:8200",
+        "Token": "password",
+        "RootPKIPath": "connect-root",
+        "IntermediatePKIPath": "connect-intermediate",
+        "RotationPeriod": "1h",
+        "IntermediateCertTTL": "3h"
+    },
+    "ForceWithoutCrossSigning": true
+}
+  

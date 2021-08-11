@@ -1,0 +1,100 @@
+
+## Envoy Debug
+
+docker exec -it web /bin/bash
+curl -XPOST localhost:19001/logging?level=debug
+
+docker exec -it api /bin/bash
+curl -XPOST localhost:19001/logging?level=debug
+
+
+## Check CA configuration
+
+
+curl -k \
+    --header "X-Consul-Token: ${CONSUL_HTTP_TOKEN}" \
+    ${CONSUL_HTTP_ADDR}/v1/agent/connect/ca/roots
+
+
+
+docker exec -it server-1 "/bin/bash"
+
+curl http://127.0.0.1:8500/v1/connect/ca/configuration
+
+
+curl \
+    --header "X-Consul-Token: ${CONSUL_HTTP_TOKEN}" \
+    http://127.0.0.1:8500/v1/connect/ca/configuration
+
+
+
+curl -k \
+    --header "X-Consul-Token: ${CONSUL_HTTP_TOKEN}" \
+    ${CONSUL_HTTP_ADDR}/v1/connect/ca/configuration
+
+
+
+consul connect ca get-config
+{
+	"Provider": "vault",
+	"Config": {
+		"Address": "http://172.19.0.2:8200",
+		"IntermediateCertTTL": "8760h",
+		"IntermediatePKIPath": "connect-intermediate",
+		"LeafCertTTL": "72h",
+		"RootPKIPath": "connect-root",
+		"RotationPeriod": "2160h",
+		"Token": "password"
+	},
+	"State": null,
+	"CreateIndex": 7,
+	"ModifyIndex": 7
+}
+
+## Set CA config
+
+### Consul
+
+
+curl -sk \
+    --header "X-Consul-Token: ${CONSUL_HTTP_TOKEN}" \
+    --request PUT \
+     --data @assets/config-connect-ca-provider-vault.json \
+    ${CONSUL_HTTP_ADDR}/v1/connect/ca/configuration
+
+
+{  "Provider": "consul",  "Config": {    "LeafCertTTL": "72h",    "PrivateKey": "-----BEGIN RSA PRIVATE KEY-----...",    "RootCert": "-----BEGIN CERTIFICATE-----...",    "RotationPeriod": "2160h",    "IntermediateCertTTL": "8760h"  },  "ForceWithoutCrossSigning": false}
+
+
+{
+  "Provider": "consul",
+  "Config": {
+    "LeafCertTTL": "72h",
+    "RotationPeriod": "2160h",
+    "IntermediateCertTTL": "8760h"
+  },
+  "ForceWithoutCrossSigning": false
+}
+
+
+consul connect ca set-config  -config-file assets/config-connect-ca-provider-vault.json
+
+
+## Check service certificates
+
+curl -k \
+    --header "X-Consul-Token: ${CONSUL_HTTP_TOKEN}" \
+    ${CONSUL_HTTP_ADDR}/v1/agent/connect/ca/leaf/web
+
+
+{
+  "SerialNumber": "6b:52:32:b6:af:0d:c6:46:af:0f:80:8a:bc:f0:40:cf:bd:fa:1f:73",
+  "CertPEM": "-----BEGIN CERTIFICATE-----\nMIICSjCCAfCgAwIBAgIUa1Iytq8NxkavD4CKvPBAz736H3MwCgYIKoZIzj0EAwIw\nLzEtMCsGA1UEAxMkcHJpLTFhcDZuazMudmF1bHQuY2EuYThmOWE1OTMuY29uc3Vs\nMB4XDTIxMDYyMzE0MjAxMFoXDTIxMDYyNjE0MjA0MFowKjEoMCYGA1UEAxMfd2Vi\nLnN2Yy5kZWZhdWx0LmE4ZjlhNTkzLmNvbnN1bDBZMBMGByqGSM49AgEGCCqGSM49\nAwEHA0IABNw812tqsX01GCFoZGuDmJszKrl3ZvTtroPccW+690SnLrjHObZajXPZ\nuJIUbjIvyvn3lvLmA7TCfZokCYmKFd2jge4wgeswDgYDVR0PAQH/BAQDAgOoMB0G\nA1UdJQQWMBQGCCsGAQUFBwMBBggrBgEFBQcDAjAdBgNVHQ4EFgQU7jMIECgjQU8R\naMOmK5bHiJ0ZrR4wHwYDVR0jBBgwFoAUxU37jSLBdEfmG2WfaYN3FN3GZPAwegYD\nVR0RBHMwcYIfd2ViLnN2Yy5kZWZhdWx0LmE4ZjlhNTkzLmNvbnN1bIZOc3BpZmZl\nOi8vYThmOWE1OTMtNWI5Ny1jODE0LTkyZTAtMWJmYWMwYzQxOGQzLmNvbnN1bC9u\ncy9kZWZhdWx0L2RjL2RjMS9zdmMvd2ViMAoGCCqGSM49BAMCA0gAMEUCIBPVDE/P\nqQf6xgS2qIQbVH3YDeWkJZ26kiBvt+4D1BRFAiEA9XQR08k7EuwhTWu1qsyiayru\nsx5lJl8SXycW1M/mnEA=\n-----END CERTIFICATE-----\n-----BEGIN CERTIFICATE-----\nMIICLDCCAdKgAwIBAgIUYPvkPNaFdjVqxHPf1pQRep+mW9owCgYIKoZIzj0EAwIw\nLzEtMCsGA1UEAxMkcHJpLWE5OTZjN2kudmF1bHQuY2EuYThmOWE1OTMuY29uc3Vs\nMB4XDTIxMDYyMzEzNTYzMVoXDTIyMDYyMzEzNTcwMVowLzEtMCsGA1UEAxMkcHJp\nLTFhcDZuazMudmF1bHQuY2EuYThmOWE1OTMuY29uc3VsMFkwEwYHKoZIzj0CAQYI\nKoZIzj0DAQcDQgAE+tReq7sNHj/zz9x81QDYtPhUDitZPm7zZzMAui4R3a5twbfq\n1sEcTLiFYEMOQPyT/87Z9rc0OAO+Jg8OaQl+Q6OByzCByDAOBgNVHQ8BAf8EBAMC\nAQYwDwYDVR0TAQH/BAUwAwEB/zAdBgNVHQ4EFgQUxU37jSLBdEfmG2WfaYN3FN3G\nZPAwHwYDVR0jBBgwFoAUVnh2CCxN89PzUnNFycWL9gHEQ2swZQYDVR0RBF4wXIIk\ncHJpLTFhcDZuazMudmF1bHQuY2EuYThmOWE1OTMuY29uc3VshjRzcGlmZmU6Ly9h\nOGY5YTU5My01Yjk3LWM4MTQtOTJlMC0xYmZhYzBjNDE4ZDMuY29uc3VsMAoGCCqG\nSM49BAMCA0gAMEUCIB0uk6s+UXKlaidJkIxU8ImFrLiQb2XZ81CkX5DupCXuAiEA\npJLqsiXm8OURu2OVAFSzUf9uDGR+aOKRjLBq/HYy//o=\n-----END CERTIFICATE-----\n-----BEGIN CERTIFICATE-----\nMIICLDCCAdKgAwIBAgIUYPvkPNaFdjVqxHPf1pQRep+mW9owCgYIKoZIzj0EAwIw\nLzEtMCsGA1UEAxMkcHJpLWE5OTZjN2kudmF1bHQuY2EuYThmOWE1OTMuY29uc3Vs\nMB4XDTIxMDYyMzEzNTYzMVoXDTIyMDYyMzEzNTcwMVowLzEtMCsGA1UEAxMkcHJp\nLTFhcDZuazMudmF1bHQuY2EuYThmOWE1OTMuY29uc3VsMFkwEwYHKoZIzj0CAQYI\nKoZIzj0DAQcDQgAE+tReq7sNHj/zz9x81QDYtPhUDitZPm7zZzMAui4R3a5twbfq\n1sEcTLiFYEMOQPyT/87Z9rc0OAO+Jg8OaQl+Q6OByzCByDAOBgNVHQ8BAf8EBAMC\nAQYwDwYDVR0TAQH/BAUwAwEB/zAdBgNVHQ4EFgQUxU37jSLBdEfmG2WfaYN3FN3G\nZPAwHwYDVR0jBBgwFoAUVnh2CCxN89PzUnNFycWL9gHEQ2swZQYDVR0RBF4wXIIk\ncHJpLTFhcDZuazMudmF1bHQuY2EuYThmOWE1OTMuY29uc3VshjRzcGlmZmU6Ly9h\nOGY5YTU5My01Yjk3LWM4MTQtOTJlMC0xYmZhYzBjNDE4ZDMuY29uc3VsMAoGCCqG\nSM49BAMCA0gAMEUCIB0uk6s+UXKlaidJkIxU8ImFrLiQb2XZ81CkX5DupCXuAiEA\npJLqsiXm8OURu2OVAFSzUf9uDGR+aOKRjLBq/HYy//o=\n-----END CERTIFICATE-----",
+  "PrivateKeyPEM": "-----BEGIN EC PRIVATE KEY-----\nMHcCAQEEIFbGeWzFAuNaEWKpunyfcbeBJB+DBZrZ+Y++zcV+VZbyoAoGCCqGSM49\nAwEHoUQDQgAE3DzXa2qxfTUYIWhka4OYmzMquXdm9O2ug9xxb7r3RKcuuMc5tlqN\nc9m4khRuMi/K+feW8uYDtMJ9miQJiYoV3Q==\n-----END EC PRIVATE KEY-----\n",
+  "Service": "web",
+  "ServiceURI": "spiffe://a8f9a593-5b97-c814-92e0-1bfac0c418d3.consul/ns/default/dc/dc1/svc/web",
+  "ValidAfter": "2021-06-23T14:20:10Z",
+  "ValidBefore": "2021-06-26T14:20:40Z",
+  "CreateIndex": 276,
+  "ModifyIndex": 276
+}

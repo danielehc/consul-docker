@@ -1,0 +1,58 @@
+
+
+export VAULT_ADDR='http://127.0.0.1:8200'
+export VAULT_TOKEN="password"
+
+
+vault secrets enable consul
+
+vault secrets tune -max-lease-ttl=30s
+
+vault secrets list -detailed
+
+
+export CONSUL_HTTP_TOKEN=8548daac-f86d-9aff-57ad-dd7190343214 
+
+consul acl token create -policy-name=global-management
+
+consul acl token create -policy-name=global-management -expires-ttl=60m
+
+ vault write consul/config/access \
+    address=https://server.one.mesh:443 \
+    token=bba47b32-a48f-2af2-0464-2ea65e349d9d \
+    ca_cert=@/assets/secrets/consul-agent-ca.pem \
+    max_ttl
+
+
+consul acl policy create -name 'acl-policy-dns' -description 'Policy for DNS endpoints' -rules @/assets/acl-policy-dns.hcl
+
+consul acl policy create -name 'acl-policy-server-node' -description 'Policy for Server nodes' -rules @/assets/acl-policy-server-node.hcl
+
+vault write consul/roles/consul-server-role policies=acl-policy-server-node -ttl=10m
+
+
+
+
+ vault read consul/creds/consul-server-role -format=json | jq -r ".data.token"
+
+
+curl \
+    --header "X-Vault-Token: password" \
+    --request LIST \
+    http://127.0.0.1:8200/v1/sys/leases/lookup/consul/creds/consul-server-role
+
+
+curl \
+    --header "X-Vault-Token: password" \
+    --request PUT \
+    --data "{\"lease_id\": "consul/creds/consul-server-role"
+}" \
+    http://127.0.0.1:8200/v1/sys/leases/lookup
+
+
+
+vault write consul/roles/global-management policies=global-management ttl=120s
+
+vault read consul/creds/global-management -format=json
+
+vault read consul/creds/global-management -format=json | jq -r ".data.token"
