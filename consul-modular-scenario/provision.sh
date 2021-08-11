@@ -104,7 +104,7 @@ print_vars() {
 
     elif [ "$1" == "consul" ]; then
 
-      #echo "export CONSUL_HTTP_ADDR=https://${SERVER_IP}:443"
+      echo "export CONSUL_HTTP_ADDR=https://${SERVER_IP}:443"
       echo "export CONSUL_HTTP_ADDR=https://localhost:1443"
       echo "export CONSUL_HTTP_TOKEN=${CONSUL_HTTP_TOKEN}"
       echo "export CONSUL_HTTP_SSL=true"
