@@ -7,7 +7,9 @@
         "RootPKIPath": "connect-root",
         "IntermediatePKIPath": "connect-intermediate",
         "RotationPeriod": "1h",
-        "IntermediateCertTTL": "3h"
+        "IntermediateCertTTL": "3h",
+        "PrivateKeyType": "rsa",
+        "PrivateKeyBits": 2048
     },
     "ForceWithoutCrossSigning": false
 }

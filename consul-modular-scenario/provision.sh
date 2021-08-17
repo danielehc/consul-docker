@@ -300,7 +300,7 @@ DOMAIN="consul"
 ## three-tier application scenario.
 IMAGE_NAME=danielehc/consul-learn-image
 # CONSUL_VERSION=1.9.4-ent
-CONSUL_VERSION=${CONSUL_VERSION:="1.10.0"}
+CONSUL_VERSION=${CONSUL_VERSION:="1.10.1"}
 ENVOY_VERSION=${ENVOY_VERSION:="1.18.3"}
 IMAGE_TAG=v${CONSUL_VERSION}-v${ENVOY_VERSION}
 
@@ -567,6 +567,10 @@ connect {
       root_pki_path = "connect-root"
       intermediate_pki_path = "connect-intermediate"
       leaf_cert_ttl = "1h"
+      rotation_period = "1h"
+      intermediate_cert_ttl = "3h"
+      private_key_type = "rsa"
+      private_key_bits = 2048
   }
 }
 EOF
@@ -627,7 +631,7 @@ for i in $(seq 1 ${SERVER_NUMBER}); do
       -config-file=/assets/secrets/agent-server-connect-ca.hcl \
       -config-file=/assets/agent-server-secure.hcl \
       -config-file=/assets/secrets/agent-${DATACENTER}-server-$i-tls.hcl \
-      -config-file=/assets/secrets/agent-gossip-encryption.hcl > ${LOGS}/consul-server-$i.log 2>&1
+      -config-file=/assets/secrets/agent-gossip-encryption.hcl > ${LOGS}/docker-server-$i.log 2>&1
   
   ## Logs container command if PROVISION_LOG is enabled
   log_container_command "server-$i"
@@ -752,7 +756,7 @@ docker run \
     -config-file=/assets/agent-client-connect.hcl \
     -config-file=/assets/agent-client-secure.hcl \
     -config-file=/assets/secrets/agent-gossip-encryption.hcl \
-    -config-file=/assets/secrets/agent-client-tokens.hcl > ${LOGS}/consul-client-api.log 2>&1
+    -config-file=/assets/secrets/agent-client-tokens.hcl > ${LOGS}/docker-client-api.log 2>&1
 
 ## Logs container command if PROVISION_LOG is enabled
 log_container_command api
@@ -780,7 +784,7 @@ docker run \
     -config-file=/assets/agent-client-connect.hcl \
     -config-file=/assets/agent-client-secure.hcl \
     -config-file=/assets/secrets/agent-gossip-encryption.hcl \
-    -config-file=/assets/secrets/agent-client-tokens.hcl > ${LOGS}/consul-client-web.log 2>&1
+    -config-file=/assets/secrets/agent-client-tokens.hcl > ${LOGS}/docker-client-web.log 2>&1
 
 ## Logs container command if PROVISION_LOG is enabled
 log_container_command web

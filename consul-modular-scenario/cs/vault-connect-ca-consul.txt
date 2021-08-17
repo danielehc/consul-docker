@@ -10,16 +10,16 @@ curl -XPOST localhost:19001/logging?level=debug
 
 ## Check CA configuration
 
-
 curl -k \
     --header "X-Consul-Token: ${CONSUL_HTTP_TOKEN}" \
-    ${CONSUL_HTTP_ADDR}/v1/agent/connect/ca/roots
+    ${CONSUL_HTTP_ADDR}/v1/agent/connect/ca/roots | jq
 
 
 
 docker exec -it server-1 "/bin/bash"
 
 curl http://127.0.0.1:8500/v1/connect/ca/configuration
+
 
 
 curl \
@@ -31,6 +31,11 @@ curl \
 curl -k \
     --header "X-Consul-Token: ${CONSUL_HTTP_TOKEN}" \
     ${CONSUL_HTTP_ADDR}/v1/connect/ca/configuration
+
+
+curl -sk \
+    --header "X-Consul-Token: ${CONSUL_HTTP_TOKEN}" \
+    ${CONSUL_HTTP_ADDR}/v1/connect/ca/configuration | jq
 
 
 
@@ -53,8 +58,7 @@ consul connect ca get-config
 
 ## Set CA config
 
-### Consul
-
+### Vault
 
 curl -sk \
     --header "X-Consul-Token: ${CONSUL_HTTP_TOKEN}" \
@@ -63,8 +67,35 @@ curl -sk \
     ${CONSUL_HTTP_ADDR}/v1/connect/ca/configuration
 
 
+### Vault RSA 2048
+
+curl -sk \
+    --header "X-Consul-Token: ${CONSUL_HTTP_TOKEN}" \
+    --request PUT \
+     --data @assets/config-connect-ca-provider-vault-rsa-2048.json \
+    ${CONSUL_HTTP_ADDR}/v1/connect/ca/configuration
+
+### Vault EC 256
+
+curl -sk \
+    --header "X-Consul-Token: ${CONSUL_HTTP_TOKEN}" \
+    --request PUT \
+     --data @assets/config-connect-ca-provider-vault-ec-256.json \
+    ${CONSUL_HTTP_ADDR}/v1/connect/ca/configuration
+
+
 {  "Provider": "consul",  "Config": {    "LeafCertTTL": "72h",    "PrivateKey": "-----BEGIN RSA PRIVATE KEY-----...",    "RootCert": "-----BEGIN CERTIFICATE-----...",    "RotationPeriod": "2160h",    "IntermediateCertTTL": "8760h"  },  "ForceWithoutCrossSigning": false}
 
+
+#### Troubleshooting
+
+[DEBUG] agent.auto_config: handling a cache update event: correlation_id=roots
+[DEBUG] agent.auto_config: roots watch fired - updating CA certificates
+
+[ERROR] agent.envoy.xds: got error response from envoy proxy: service_id=api-1-sidecar-proxy typeUrl=type.googleapis.com/envoy.config.listener.v3.Listener xdsVersion=v3 nonce=00013a53 error="rpc error: code = Internal desc = Error adding/updating listener(s) public_listener:0.0.0.0:21000: Failed to load trusted CA certificates from <inline>
+"
+[ERROR] agent.envoy.xds: got error response from envoy proxy: service_id=api-1-sidecar-proxy typeUrl=type.googleapis.com/envoy.config.listener.v3.Listener xdsVersion=v3 nonce=00013a54 error="rpc error: code = Internal desc = Error adding/updating listener(s) public_listener:0.0.0.0:21000: Failed to load trusted CA certificates from <inline>
+"
 
 {
   "Provider": "consul",
@@ -77,15 +108,20 @@ curl -sk \
 }
 
 
+
 consul connect ca set-config  -config-file assets/config-connect-ca-provider-vault.json
 
 
 ## Check service certificates
 
-curl -k \
+curl -sk \
     --header "X-Consul-Token: ${CONSUL_HTTP_TOKEN}" \
     ${CONSUL_HTTP_ADDR}/v1/agent/connect/ca/leaf/web
 
+
+curl -sk \
+    --header "X-Consul-Token: ${CONSUL_HTTP_TOKEN}" \
+    ${CONSUL_HTTP_ADDR}/v1/agent/connect/ca/leaf/web | jq
 
 {
   "SerialNumber": "6b:52:32:b6:af:0d:c6:46:af:0f:80:8a:bc:f0:40:cf:bd:fa:1f:73",
@@ -98,3 +134,52 @@ curl -k \
   "CreateIndex": 276,
   "ModifyIndex": 276
 }
+
+
+## Get leaf EC key details
+
+curl -sk \
+    --header "X-Consul-Token: ${CONSUL_HTTP_TOKEN}" \
+    ${CONSUL_HTTP_ADDR}/v1/agent/connect/ca/leaf/web \
+    | jq -r ".PrivateKeyPEM" | openssl ec -text -noout
+
+
+
+
+
+## Testing
+
+### Get CA configuration
+
+curl -sk \
+    --header "X-Consul-Token: ${CONSUL_HTTP_TOKEN}" \
+    ${CONSUL_HTTP_ADDR}/v1/connect/ca/configuration | jq
+
+
+### Get root certificates
+
+curl -k \
+    --header "X-Consul-Token: ${CONSUL_HTTP_TOKEN}" \
+    ${CONSUL_HTTP_ADDR}/v1/agent/connect/ca/roots | jq
+
+
+### Get certificates for service web
+
+curl -sk \
+    --header "X-Consul-Token: ${CONSUL_HTTP_TOKEN}" \
+    ${CONSUL_HTTP_ADDR}/v1/agent/connect/ca/leaf/web | jq
+
+
+### Envoy Certificates Check
+
+api: http://172.19.0.7:19001/certs
+web: http://172.19.0.8:19001/certs
+
+
+### Set CA config to Vault
+
+curl -sk \
+    --header "X-Consul-Token: ${CONSUL_HTTP_TOKEN}" \
+    --request PUT \
+     --data @assets/config-connect-ca-provider-vault.json \
+    ${CONSUL_HTTP_ADDR}/v1/connect/ca/configuration
