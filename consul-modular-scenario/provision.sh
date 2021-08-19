@@ -283,7 +283,7 @@ cont_exec() {
     ${CONTAINER_NAME} sh -c "$COMMAND"
 
 }
-  
+
 spin_service() {
   echo pippo
 }
@@ -309,11 +309,10 @@ DOMAIN="consul"
 ## application (/usr/local/bin/fake-service) that will be used to simulate a
 ## three-tier application scenario.
 IMAGE_NAME=danielehc/consul-learn-image
-# CONSUL_VERSION=1.9.4-ent
+
 CONSUL_VERSION=${CONSUL_VERSION:="1.10.1"}
 ENVOY_VERSION=${ENVOY_VERSION:="1.18.3"}
 IMAGE_TAG=v${CONSUL_VERSION}-v${ENVOY_VERSION}
-
 
 VAULT_VERSION="latest"
 
@@ -450,14 +449,13 @@ docker run \
 
 log "Generating Consul TLS certificates and gossip key"
 
-echo "Generate gossip key"
+echo "Generate gossip encryption key"
 
 docker exec \
   -w /assets \
   operator bash -c \
     'mkdir -p ./secrets; \
     cd ./secrets; \
-    echo Generate gossip encyption key; \
     echo encrypt = \"$(consul keygen)\" > agent-gossip-encryption.hcl;'
 
 echo "Generate server certificates and config files"
@@ -550,22 +548,24 @@ fi
 
 if [ ! -f "./assets/secrets/consul-agent-ca.pem" ]; then
 
-  echo Using Consul CA for certificates
+  echo "Using Consul CA for certificates"
+
+  echo "Generate CA root certificate"
 
   docker exec \
     -w /assets/secrets \
     operator bash -c \
-      "echo Generate CA certificate; \
-      consul tls ca create consul-agent-ca.pem -domain=\"${DOMAIN}\" > /dev/null 2>&1;"
+      "consul tls ca create consul-agent-ca.pem -domain=${DOMAIN} > /dev/null 2>&1;"
       
       # > /dev/null 2>&1;" 
 
+  echo Generate certificate for servers;
+  
   docker exec \
     -w /assets/secrets \
     operator bash -c \
-      "echo Generate certificate for servers; \
-      for ((i = 0 ; i <= ${SERVER_NUMBER} ; i++)); do \
-        consul tls cert create -server -ca=consul-agent-ca.pem -key=consul-agent-ca-key.pem -domain=${DOMAIN} -dc=${DATACENTER} > /dev/null 2>&1; \ 
+      "for ((i = 0 ; i <= ${SERVER_NUMBER} ; i++)); do \
+        consul tls cert create -server -ca=consul-agent-ca.pem -key=consul-agent-ca-key.pem -domain=${DOMAIN} -dc=${DATACENTER} > /dev/null 2>&1; \
       done" 
 
 # > /dev/null 2>&1; \
@@ -577,6 +577,7 @@ cert_file = "/assets/secrets/${DATACENTER}-server-${DOMAIN}-${i}.pem"
 key_file  = "/assets/secrets/${DATACENTER}-server-${DOMAIN}-${i}-key.pem"
 EOF
 done
+
 fi
 
 log "Configure CA for service mesh"
