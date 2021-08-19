@@ -14,8 +14,6 @@ curl -k \
     --header "X-Consul-Token: ${CONSUL_HTTP_TOKEN}" \
     ${CONSUL_HTTP_ADDR}/v1/agent/connect/ca/roots | jq
 
-
-
 docker exec -it server-1 "/bin/bash"
 
 curl http://127.0.0.1:8500/v1/connect/ca/configuration
@@ -118,7 +116,6 @@ curl -sk \
     --header "X-Consul-Token: ${CONSUL_HTTP_TOKEN}" \
     ${CONSUL_HTTP_ADDR}/v1/agent/connect/ca/leaf/web
 
-
 curl -sk \
     --header "X-Consul-Token: ${CONSUL_HTTP_TOKEN}" \
     ${CONSUL_HTTP_ADDR}/v1/agent/connect/ca/leaf/web | jq
@@ -165,7 +162,7 @@ curl -k \
 
 ### Get certificates for service web
 
-curl -sk \
+curl -vsk \
     --header "X-Consul-Token: ${CONSUL_HTTP_TOKEN}" \
     ${CONSUL_HTTP_ADDR}/v1/agent/connect/ca/leaf/web | jq
 
@@ -182,4 +179,11 @@ curl -sk \
     --header "X-Consul-Token: ${CONSUL_HTTP_TOKEN}" \
     --request PUT \
      --data @assets/config-connect-ca-provider-vault.json \
+    ${CONSUL_HTTP_ADDR}/v1/connect/ca/configuration
+
+
+curl -sk \
+    --header "X-Consul-Token: ${CONSUL_HTTP_TOKEN}" \
+    --request PUT \
+     --data @assets/config-connect-ca-provider-vault-rsa-2048.json \
     ${CONSUL_HTTP_ADDR}/v1/connect/ca/configuration

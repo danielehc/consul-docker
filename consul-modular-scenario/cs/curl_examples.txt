@@ -1,0 +1,9 @@
+
+
+
+ openssl x509 -text -noout -in ./assets/secrets/consul-agent-ca.pem
+ openssl x509 -text -noout -in ./assets/secrets/vault_root_CA_cert.crt
+
+ openssl s_client -showcerts -servername server -connect 172.19.0.6:443
+
+ openssl x509 -text -noout -in ./assets/secrets/cert_from_url.pem

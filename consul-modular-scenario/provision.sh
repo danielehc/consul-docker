@@ -108,18 +108,28 @@ print_vars() {
       echo "export CONSUL_HTTP_ADDR=https://localhost:1443"
       echo "export CONSUL_HTTP_TOKEN=${CONSUL_HTTP_TOKEN}"
       echo "export CONSUL_HTTP_SSL=true"
+      echo "export CONSUL_CACERT=./assets/secrets/consul-agent-ca.pem"
       ## This is a boolean value (default true) to specify 
       # SSL certificate verification; setting this value to 
       # false is not recommended for production use. 
       # Example for development purposes:
-      echo "export CONSUL_HTTP_SSL_VERIFY=false"
+      # echo "export CONSUL_HTTP_SSL_VERIFY=false"
   
     elif [ "$1" == "vault" ]; then
 
       echo "export VAULT_ADDR=http://${VAULT_IP}:8200"
       echo "export VAULT_TOKEN=${VAULT_TOKEN}"
 
+    elif [ "$1" == "curl" ]; then
+
+      echo "export CONSUL_SERVER_IP=${SERVER_IP}"
+      echo "export CONSUL_DC=${DATACENTER}"
+      echo "export CONSUL_DOMAIN=${DOMAIN}"
+      echo "export CONSUL_SERVER_FQDM=server.${CONSUL_DC}.${CONSUL_DOMAIN}"
+
     fi
+
+
 
   else
     
@@ -304,11 +314,20 @@ CONSUL_VERSION=${CONSUL_VERSION:="1.10.1"}
 ENVOY_VERSION=${ENVOY_VERSION:="1.18.3"}
 IMAGE_TAG=v${CONSUL_VERSION}-v${ENVOY_VERSION}
 
+
 VAULT_VERSION="latest"
+
+# --- VAULT INTEGRATION ---
+
+## If true uses Vault to generate Consul TLS certificates
+VAULT_TLS="true"
+
+## If true uses Vault as Consul Connect CA
+VAULT_CONNECT_CA="false"
 
 # --- ENVIRONMENT ---
 
-## ## Docker tag for resources
+## Docker tag for resources
 DK_TAG="learn"
 
 ## Paths for the environment
@@ -413,64 +432,12 @@ docker run \
 
 sleep 5
 
-log "Configure root CA"
-
-## Enable and tune pki secrets engine
-vault_exec vault $VAULT_ADDR $VAULT_TOKEN "vault secrets enable pki"
-
-vault_exec vault $VAULT_ADDR $VAULT_TOKEN "vault secrets tune -max-lease-ttl=87600h pki"
-
-# Generate the root CA
-vault_exec vault $VAULT_ADDR $VAULT_TOKEN \
-  "vault write -field=certificate \
-    pki/root/generate/internal \
-    common_name=${DATACENTER}.${DOMAIN} \
-    ttl=87600h" > ${ASSETS}secrets/vault_root_CA_cert.crt
-
-# Configure CA and CRL URLs
-vault_exec vault $VAULT_ADDR $VAULT_TOKEN \
-  'vault write pki/config/urls \
-    issuing_certificates="http://127.0.0.1:8200/v1/pki/ca" \
-    crl_distribution_points="http://127.0.0.1:8200/v1/pki/crl"'
-set +x 
-log "Configure intermediate CA"
-
-vault_exec vault $VAULT_ADDR $VAULT_TOKEN \
-  'vault secrets enable -path=pki_int pki'
-
-vault_exec vault $VAULT_ADDR $VAULT_TOKEN \
-  "vault secrets tune -max-lease-ttl=43800h pki_int"
-
-# Request an intermediate certificate signing request (CSR)
-vault_exec vault $VAULT_ADDR $VAULT_TOKEN \
-  "vault write -format=json \
-    pki_int/intermediate/generate/internal \
-    common_name=\"${DATACENTER}.${DOMAIN}_intermediate_authority\"" \
-    | jq -r '.data.csr' > ${ASSETS}secrets/pki_intermediate.csr
-
-# Sign the CSR and import the certificate into Vault
-vault_exec vault $VAULT_ADDR $VAULT_TOKEN \
-  "vault write -format=json pki/root/sign-intermediate \
-    csr=@./secrets/pki_intermediate.csr \
-    format=pem_bundle ttl=43800h" | jq -r '.data.certificate' > ${ASSETS}secrets/intermediate.cert.pem
-
-vault_exec vault $VAULT_ADDR $VAULT_TOKEN \
-  'vault write pki_int/intermediate/set-signed \
-    certificate=@./secrets/intermediate.cert.pem'
-
-log "Create Vault role for Consul DC"
-
-vault_exec vault $VAULT_ADDR $VAULT_TOKEN \
- "vault write pki_int/roles/${DOMAIN}-${DATACENTER} \
-    allowed_domains=${DATACENTER}.${DOMAIN} \
-    allow_subdomains=true \
-    generate_lease=true \
-    max_ttl=720h"
-
 ########## ------------------------------------------------
 header     "GENERATE DYNAMIC CONFIGURATION"
 ###### -----------------------------------------------
+
 log "Starting Operator container"
+
 docker run \
   -d \
   -v ${PWD}/assets:/assets \
@@ -481,7 +448,9 @@ docker run \
   --label tag=${DK_TAG} \
   ${IMAGE_NAME}:${IMAGE_TAG} "" > /dev/null 2>&1
 
-log "Generating Consul certificates and key"
+log "Generating Consul TLS certificates and gossip key"
+
+echo "Generate gossip key"
 
 docker exec \
   -w /assets \
@@ -493,28 +462,86 @@ docker exec \
 
 echo "Generate server certificates and config files"
 
-echo "Using Vault as CA"
+if [ "${VAULT_TLS}" == "true" ] ; then
 
-for ((i = 1 ; i <= ${SERVER_NUMBER} ; i++)); do
+  echo "Using Vault as CA"
 
-  ## Create certificates
+  log "Configure root CA"
+
+  ## Enable and tune pki secrets engine
+  vault_exec vault $VAULT_ADDR $VAULT_TOKEN "vault secrets enable pki"
+
+  vault_exec vault $VAULT_ADDR $VAULT_TOKEN "vault secrets tune -max-lease-ttl=87600h pki"
+
+  # Generate the root CA
+  vault_exec vault $VAULT_ADDR $VAULT_TOKEN \
+    "vault write -field=certificate \
+      pki/root/generate/internal \
+      common_name=${DATACENTER}.${DOMAIN} \
+      ttl=87600h" > ${ASSETS}secrets/vault_root_CA_cert.crt
+
+  # Configure CA and CRL URLs
+  vault_exec vault $VAULT_ADDR $VAULT_TOKEN \
+    'vault write pki/config/urls \
+      issuing_certificates="http://127.0.0.1:8200/v1/pki/ca" \
+      crl_distribution_points="http://127.0.0.1:8200/v1/pki/crl"'
+
+  log "Configure intermediate CA"
+
+  vault_exec vault $VAULT_ADDR $VAULT_TOKEN \
+    'vault secrets enable -path=pki_int pki'
+
+  vault_exec vault $VAULT_ADDR $VAULT_TOKEN \
+    "vault secrets tune -max-lease-ttl=43800h pki_int"
+
+  # Request an intermediate certificate signing request (CSR)
   vault_exec vault $VAULT_ADDR $VAULT_TOKEN \
     "vault write -format=json \
-      pki_int/issue/${DOMAIN}-${DATACENTER} \
-      common_name=server.${DATACENTER}.${DOMAIN} \
-      ttl=24h" | jq -j '.data.certificate, "\u0000", .data.private_key, "\u0000", .data.issuing_ca, "\u0000"' \
-      | { IFS= read -r -d '' cert && printf '%s\n' "$cert" > ./assets/secrets/server.${i}.${DATACENTER}.${DOMAIN}.crt;
-          IFS= read -r -d '' key && printf '%s\n' "$key" > ./assets/secrets/server.${i}.${DATACENTER}.${DOMAIN}.key;
-          IFS= read -r -d '' ca && printf '%s\n' "$ca" > ./assets/secrets/consul-agent-ca.pem; }
+      pki_int/intermediate/generate/internal \
+      common_name=\"${DATACENTER}.${DOMAIN}_intermediate_authority\"" \
+      | jq -r '.data.csr' > ${ASSETS}secrets/pki_intermediate.csr
 
-  ## Create configuration files
-  tee ${ASSETS}secrets/agent-${DATACENTER}-server-$i-tls.hcl > /dev/null << EOF
+  # Sign the CSR and import the certificate into Vault
+  vault_exec vault $VAULT_ADDR $VAULT_TOKEN \
+    "vault write -format=json pki/root/sign-intermediate \
+      csr=@./secrets/pki_intermediate.csr \
+      format=pem_bundle ttl=43800h" | jq -r '.data.certificate' > ${ASSETS}secrets/intermediate.cert.pem
+
+  vault_exec vault $VAULT_ADDR $VAULT_TOKEN \
+    'vault write pki_int/intermediate/set-signed \
+      certificate=@./secrets/intermediate.cert.pem'
+
+  log "Create Vault role for Consul DC"
+
+  vault_exec vault $VAULT_ADDR $VAULT_TOKEN \
+  "vault write pki_int/roles/${DOMAIN}-${DATACENTER} \
+      allowed_domains=${DATACENTER}.${DOMAIN} \
+      allow_subdomains=true \
+      generate_lease=true \
+      max_ttl=720h"
+
+  for ((i = 1 ; i <= ${SERVER_NUMBER} ; i++)); do
+
+    ## Create certificates
+    vault_exec vault $VAULT_ADDR $VAULT_TOKEN \
+      "vault write -format=json \
+        pki_int/issue/${DOMAIN}-${DATACENTER} \
+        common_name=server.${DATACENTER}.${DOMAIN} \
+        ttl=24h" | jq -j '.data.certificate, "\u0000", .data.private_key, "\u0000", .data.issuing_ca, "\u0000"' \
+        | { IFS= read -r -d '' cert && printf '%s\n' "$cert" > ./assets/secrets/server.${i}.${DATACENTER}.${DOMAIN}.crt;
+            IFS= read -r -d '' key && printf '%s\n' "$key" > ./assets/secrets/server.${i}.${DATACENTER}.${DOMAIN}.key;
+            IFS= read -r -d '' ca && printf '%s\n' "$ca" > ./assets/secrets/consul-agent-ca.pem; }
+
+    ## Create configuration files
+    tee ${ASSETS}secrets/agent-${DATACENTER}-server-$i-tls.hcl > /dev/null << EOF
 ca_file   = "/assets/secrets/consul-agent-ca.pem"
 cert_file = "assets/secrets/server.${i}.${DATACENTER}.${DOMAIN}.crt"
 key_file  = "/assets/secrets/server.${i}.${DATACENTER}.${DOMAIN}.key"
 EOF
 
-done
+  done
+
+fi
 
 ## If the CA certificate does not exist at this point means that one is needed.
 ## Used to fallback to Consul embedded CA for connect.
@@ -553,10 +580,11 @@ done
 fi
 
 log "Configure CA for service mesh"
-USE_VAULT="false"
 
-if [ "${USE_VAULT}" == "true" ] ; then
-  echo "Using Vault as CA"
+if [ "${VAULT_CONNECT_CA}" == "true" ] ; then
+
+  echo "Using Vault as Connect CA"
+
   tee ${ASSETS}secrets/agent-server-connect-ca.hcl > /dev/null << EOF
 ## Service mesh CA configuration
 connect {
@@ -574,8 +602,11 @@ connect {
   }
 }
 EOF
+
 else
+
   echo "Using Consul Connect CA"
+
   tee ${ASSETS}secrets/agent-server-connect-ca.hcl > /dev/null << EOF
 ## Service mesh CA configuration
 connect {
@@ -591,7 +622,6 @@ EOF
 # ==> Intermediate Cert TTL must be greater or equal than 3h
 
 fi
-
 
 ########## ------------------------------------------------
 header     "CONSUL - Starting Primary Datacenter"
@@ -723,16 +753,33 @@ header     "CONSUL - Starting Client Agents"
 ###### -----------------------------------------------
 
 ## TODO: Generate different token for client nodes
+## Create policy for service nodes
+
+## Policy for service nodes
+# op_exec operator ${SERVER_IP}:443 ${CONSUL_HTTP_TOKEN} \
+#   "consul acl policy create -name 'acl-policy-service-node' -description 'Policy for client nodes named service-*' -rules @acl-policy-service-node.hcl  > /dev/null 2>&1"
+
+## Policy for service
+# op_exec operator ${SERVER_IP}:443 ${CONSUL_HTTP_TOKEN} \
+#   "consul acl policy create -name 'acl-policy-service' -description 'Policy to register services' -rules @acl-policy-service.hcl  > /dev/null 2>&1"
+
+# log "Create client ACL Tokens"
+
+# op_exec operator ${SERVER_IP}:443 ${CONSUL_HTTP_TOKEN} \
+#   "consul acl token create -description 'Client - Default token' -policy-name acl-policy-service-node -policy-name acl-policy-service > ./secrets/acl-clients-agent-token.conf 2> /dev/null"
+
+# CLIENT_TOK=`cat ${ASSETS}secrets/acl-clients-agent-token.conf | grep SecretID | awk '{print $2}'` 
+
+CONSUL_AGENT_TOKEN=${CONSUL_HTTP_TOKEN}
+
 tee ${ASSETS}secrets/agent-client-tokens.hcl > /dev/null << EOF
 acl {
   tokens {
-    agent  = "${CONSUL_HTTP_TOKEN}"
+    agent  = "${CONSUL_AGENT_TOKEN}"
     default  = "${DNS_TOK}"
   }
 }
 EOF
-
-CONSUL_AGENT_TOKEN=${CONSUL_HTTP_TOKEN}
 
 ## API
 docker run \
@@ -817,90 +864,10 @@ envoy_exec api ${CONSUL_AGENT_TOKEN} \
 envoy_exec web ${CONSUL_AGENT_TOKEN} \
   "consul connect envoy -sidecar-for web -admin-bind 0.0.0.0:19001 -- -l debug > /logs/sidecar-proxy-web.log 2>&1 &"  
 
-log "Set Envoy log level"
-
-# sleep 1
-
-# ## Set Envoy log level to debug
-# cont_exec api ${CONSUL_HTTP_TOKEN} \
-#   "curl -s -XPOST localhost:19001/logging?level=debug > /dev/null"
-
-# ## Set Envoy log level to debug
-# cont_exec web ${CONSUL_HTTP_TOKEN} \
-#   "curl -s -XPOST localhost:19001/logging?level=debug > /dev/null"
 
 ########## ------------------------------------------------
 header     "CONSUL - Configure your local environment"
 ###### -----------------------------------------------
-
-## Make config available
-# ln -s /root/assets /assets
-
-# ## Copy consul binary locally
-# docker cp operator:/usr/local/bin/consul /usr/local/bin/consul
-
-# ## CTS Client
-# consul agent -ui \
-#   -datacenter=${DATACENTER} \
-#   -domain=${DOMAIN} \
-#   -node=cts-node \
-#   -bind=172.19.0.1 \
-#   -retry-join=${RETRY_JOIN} \
-#   -config-file=/assets/agent-client-secure.hcl \
-#   -config-file=/assets/secrets/agent-gossip-encryption.hcl \
-#   -config-file=/assets/secrets/agent-client-tokens.hcl > ${LOGS}/consul-client-cts.log 2>&1 &
-
-
-
-
-## GENERATE KV
-
-# BIN_PATH="./bin/"
-
-# # Populate Consul KV with random values
-# echo Populate Consul KV with random values:
-# set -x
-# for num in $(seq -w 1 100); do
-#     random_string=`cat /dev/urandom | tr -dc 'a-z0-9' | fold -w 1024 | head -n 1`
-#     ${BIN_PATH}consul kv put consul/data/key${num} ${random_string} &>/dev/null
-# done
-# set +x
-# echo -e "\n DONE\n"
-
-## GENERATE ACL
-
-# ./bin/consul acl role create -name dns-role -description 'dns role' -policy-name acl-policy-dns
-# ./bin/consul acl role create -name web-role -description 'web role' -service-identity web
-# ./bin/consul acl role create -name mixed-role-1 -description 'mixed role 1' -policy-name acl-policy-dns -policy-name acl-policy-server-node -service-identity web:dc1 -service-identity web:dc2 -service-identity api -node-identity node1 -node-identity node2:dc1 -node-identity node2:dc2
-# ./bin/consul acl role create -name server-role -description 'server role' -policy-name acl-policy-server-node
-# ./bin/consul acl token create -description "web role token" -role-name web-role
-# ./bin/consul acl token create -description "server role token" -role-name server-role
-# ./bin/consul acl token create -description "mixed role token" -role-name server-role -policy-name acl-policy-dns
-# ./bin/consul acl token create -description "mixed role token 2" -role-name server-role -policy-name acl-policy-dns -service-identity web:dc1 -service-identity api
-# ./bin/consul acl token create -description "mixed role token 3" -role-name server-role -policy-name acl-policy-dns -service-identity web:dc1 -service-identity api
-# ./bin/consul acl token create -description "mixed role token 4" -role-name server-role -policy-name acl-policy-dns -service-identity web:dc1 -service-identity web:dc2
-
-# ./bin/consul acl policy create -name 'acl-policy-consul-migrate' -description 'Policy for consul-migrate' -rules @./assets/acl-policy-consul-migrate.hcl  > /dev/null 2>&1
-# ./bin/consul acl token create -description 'consul-migrate-token' -policy-name acl-policy-consul-migrate
-
-## GENERATE PREPARED QUERIES
-
-
-## COPY CONSUL LOCALLY
-
-# Only for katacoda. Copy binaries locally.
-# docker cp operator:/usr/local/bin/consul /usr/local/bin/consul
-# docker cp vault:/bin/vault /usr/local/bin/vault
-
-## INSTALL MIGRATION TOOL
-# curl -sL -o /tmp/consul-backinator-1.6.6.tar.gz https://github.com/myENA/consul-backinator/releases/download/v1.6.6/consul-backinator-1.6.6-amd64-linux.tar.gz
-
-
-# Connect CA API
-# docker exec -it server-1 bash -c "curl http://127.0.0.1:8500/v1/connect/ca/roots" | jq -r '.Roots[].RootCert' |  openssl x509 -text -noout -in -
-# docker exec -it server-1 bash -c "curl --header \"X-Consul-Token: 36bfbf46-53c6-74e6-9411-d8d3f03bcafb\" http://127.0.0.1:8500/v1/connect/ca/configuration" | jq
-# docker exec -it server-1 bash -c "curl --header \"X-Consul-Token: 36bfbf46-53c6-74e6-9411-d8d3f03bcafb\" http://127.0.0.1:8500/v1/agent/connect/ca/leaf/web" | jq -r '.CertPEM' |  openssl x509 -text -noout -in -
-
 
 # ++-----------------+
 # || Output          |
@@ -908,7 +875,7 @@ header     "CONSUL - Configure your local environment"
 
 print_vars consul | tee ${ASSETS}secrets/consul_env.conf
 print_vars vault  | tee ${ASSETS}secrets/vault_env.conf
-# print_vars_local | tee consul_env.conf
+# print_vars curl  | tee ${ASSETS}secrets/curl_env.conf
 
 ## Only for katacoda, completes the provision
 # finish

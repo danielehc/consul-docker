@@ -1,0 +1,78 @@
+
+# ## Set Envoy log level to debug
+# cont_exec api ${CONSUL_HTTP_TOKEN} \
+#   "curl -s -XPOST localhost:19001/logging?level=debug > /dev/null"
+
+# ## Set Envoy log level to debug
+# cont_exec web ${CONSUL_HTTP_TOKEN} \
+#   "curl -s -XPOST localhost:19001/logging?level=debug > /dev/null"
+
+
+
+Configure Local Environment
+
+
+## Make config available
+# ln -s /root/assets /assets
+
+# ## Copy consul binary locally
+# docker cp operator:/usr/local/bin/consul /usr/local/bin/consul
+
+# ## CTS Client
+# consul agent -ui \
+#   -datacenter=${DATACENTER} \
+#   -domain=${DOMAIN} \
+#   -node=cts-node \
+#   -bind=172.19.0.1 \
+#   -retry-join=${RETRY_JOIN} \
+#   -config-file=/assets/agent-client-secure.hcl \
+#   -config-file=/assets/secrets/agent-gossip-encryption.hcl \
+#   -config-file=/assets/secrets/agent-client-tokens.hcl > ${LOGS}/consul-client-cts.log 2>&1 &
+
+## GENERATE KV
+
+# BIN_PATH="./bin/"
+
+# # Populate Consul KV with random values
+# echo Populate Consul KV with random values:
+# set -x
+# for num in $(seq -w 1 100); do
+#     random_string=`cat /dev/urandom | tr -dc 'a-z0-9' | fold -w 1024 | head -n 1`
+#     ${BIN_PATH}consul kv put consul/data/key${num} ${random_string} &>/dev/null
+# done
+# set +x
+# echo -e "\n DONE\n"
+
+## GENERATE ACL
+
+# ./bin/consul acl role create -name dns-role -description 'dns role' -policy-name acl-policy-dns
+# ./bin/consul acl role create -name web-role -description 'web role' -service-identity web
+# ./bin/consul acl role create -name mixed-role-1 -description 'mixed role 1' -policy-name acl-policy-dns -policy-name acl-policy-server-node -service-identity web:dc1 -service-identity web:dc2 -service-identity api -node-identity node1 -node-identity node2:dc1 -node-identity node2:dc2
+# ./bin/consul acl role create -name server-role -description 'server role' -policy-name acl-policy-server-node
+# ./bin/consul acl token create -description "web role token" -role-name web-role
+# ./bin/consul acl token create -description "server role token" -role-name server-role
+# ./bin/consul acl token create -description "mixed role token" -role-name server-role -policy-name acl-policy-dns
+# ./bin/consul acl token create -description "mixed role token 2" -role-name server-role -policy-name acl-policy-dns -service-identity web:dc1 -service-identity api
+# ./bin/consul acl token create -description "mixed role token 3" -role-name server-role -policy-name acl-policy-dns -service-identity web:dc1 -service-identity api
+# ./bin/consul acl token create -description "mixed role token 4" -role-name server-role -policy-name acl-policy-dns -service-identity web:dc1 -service-identity web:dc2
+
+# ./bin/consul acl policy create -name 'acl-policy-consul-migrate' -description 'Policy for consul-migrate' -rules @./assets/acl-policy-consul-migrate.hcl  > /dev/null 2>&1
+# ./bin/consul acl token create -description 'consul-migrate-token' -policy-name acl-policy-consul-migrate
+
+## GENERATE PREPARED QUERIES
+
+
+## COPY CONSUL LOCALLY
+
+# Only for katacoda. Copy binaries locally.
+# docker cp operator:/usr/local/bin/consul /usr/local/bin/consul
+# docker cp vault:/bin/vault /usr/local/bin/vault
+
+## INSTALL MIGRATION TOOL
+# curl -sL -o /tmp/consul-backinator-1.6.6.tar.gz https://github.com/myENA/consul-backinator/releases/download/v1.6.6/consul-backinator-1.6.6-amd64-linux.tar.gz
+
+
+# Connect CA API
+# docker exec -it server-1 bash -c "curl http://127.0.0.1:8500/v1/connect/ca/roots" | jq -r '.Roots[].RootCert' |  openssl x509 -text -noout -in -
+# docker exec -it server-1 bash -c "curl --header \"X-Consul-Token: 36bfbf46-53c6-74e6-9411-d8d3f03bcafb\" http://127.0.0.1:8500/v1/connect/ca/configuration" | jq
+# docker exec -it server-1 bash -c "curl --header \"X-Consul-Token: 36bfbf46-53c6-74e6-9411-d8d3f03bcafb\" http://127.0.0.1:8500/v1/agent/connect/ca/leaf/web" | jq -r '.CertPEM' |  openssl x509 -text -noout -in -
