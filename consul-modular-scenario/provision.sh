@@ -283,7 +283,7 @@ cont_exec() {
     ${CONTAINER_NAME} sh -c "$COMMAND"
 
 }
-
+  
 spin_service() {
   echo pippo
 }
