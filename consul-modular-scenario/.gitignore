@@ -1,6 +1,7 @@
 bin/
 certs/
 secrets/
+data/
 config/
 logs/
 opt/

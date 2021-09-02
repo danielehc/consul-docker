@@ -114,6 +114,7 @@ print_vars() {
       # false is not recommended for production use. 
       # Example for development purposes:
       # echo "export CONSUL_HTTP_SSL_VERIFY=false"
+      echo "export CONSUL_TLS_SERVER_NAME=server.${DATACENTER}.${DOMAIN}"
   
     elif [ "$1" == "vault" ]; then
 
@@ -171,6 +172,9 @@ clean_env() {
   ## Remove certificates 
   rm -rf ${ASSETS}secrets
 
+  ## Remove data 
+  rm -rf ${ASSETS}data
+
   ## Remove logs
   rm -rf ${LOGS}/*
   
@@ -195,9 +199,19 @@ show_ports() {
     echo "======================="; 
     
     # docker exec $i netstat -natp | grep LISTEN; 
-    docker exec $i netstat -natp | grep LISTEN | awk '{print $7"\t: "$4}' | sed 's/[0-9]*\///g' | sort ; 
+    docker exec $i netstat -natp 2> /dev/null | grep LISTEN | awk '{print $7"\t: "$4}' | sed 's/[0-9]*\///g' | sort ; 
     
     echo ""
+  done
+}
+
+show_ips () {
+  for i in `docker container ls --filter label=tag=${DK_TAG} --format "{{.Names}}"`; do 
+
+    local CONT_IP=`docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' $i`  
+
+    echo -e "${CONT_IP}\t- $i"; 
+
   done
 }
 
@@ -316,13 +330,17 @@ IMAGE_TAG=v${CONSUL_VERSION}-v${ENVOY_VERSION}
 
 VAULT_VERSION="latest"
 
+## Defines vault running mode
+## It can be one between DEV and PROD
+VAULT_MODE=${VAULT_MODE:="PROD"}
+
 # --- VAULT INTEGRATION ---
 
 ## If true uses Vault to generate Consul TLS certificates
 VAULT_TLS="true"
 
 ## If true uses Vault as Consul Connect CA
-VAULT_CONNECT_CA="false"
+VAULT_CONNECT_CA="true"
 
 # --- ENVIRONMENT ---
 
@@ -348,6 +366,11 @@ if   [ "$1" == "clean" ]; then
 elif [ "$1" == "ports" ]; then
 
   show_ports
+  exit 0
+
+elif [ "$1" == "ips" ]; then
+
+  show_ips
   exit 0
 
 elif [ "$1" == "env" ]; then
@@ -378,14 +401,11 @@ fi
 header     "PREREQUISITES CHECK"
 ###### -----------------------------------------------
 
-# log "Install prerequisites"
-# apt-get install -y apt-utils > /dev/null
-# apt-get install -y unzip curl jq > /dev/null
-
 log "Cleaning Environment"
 clean_env
 
 mkdir -p ${ASSETS}secrets
+mkdir -p ${ASSETS}data
 mkdir -p ${LOGS}
 
 touch ${PROVISION_LOG_FILE}
@@ -406,20 +426,23 @@ docker network create primary   --subnet=172.19.0.0/24 --label tag=${DK_TAG}
 header     "VAULT - Starting Vault server"
 ###### -----------------------------------------------
 
-## Starting Vault in DEV mode, not recommended for PROD
-## TODO Better/Proper Vault deploy
-docker run \
-  -d \
-  -v ${PWD}/assets:/assets \
-  --net primary \
-  -p 8200:8200 \
-  --name=vault \
-  --hostname=vault \
-  --label tag=${DK_TAG} \
-  --label dc=${DATACENTER} \
-  --cap-add=IPC_LOCK \
-  -e 'VAULT_DEV_ROOT_TOKEN_ID=password'  \
-  vault:${VAULT_VERSION}
+if [[ ${VAULT_MODE} == "DEV" ]]; then
+
+  log "Starting HashiCorp Vault in Dev Mode..."
+
+  ## Starting Vault in DEV mode, not recommended for PROD
+  docker run \
+    -d \
+    -v ${PWD}/assets:/assets \
+    --net primary \
+    -p 8200:8200 \
+    --name=vault \
+    --hostname=vault \
+    --label tag=${DK_TAG} \
+    --label dc=${DATACENTER} \
+    --cap-add=IPC_LOCK \
+    -e 'VAULT_DEV_ROOT_TOKEN_ID=password'  \
+    vault:${VAULT_VERSION}
 
   log_container_command vault
 
@@ -429,7 +452,57 @@ docker run \
   VAULT_ADDR='http://127.0.0.1:8200'
   VAULT_TOKEN="password"
 
-sleep 5
+elif [[ ${VAULT_MODE} == "PROD" ]]; then
+
+  log "Starting HashiCorp Vault in Prod Mode..."
+
+  # TODO: For now Vault is insecure and single node. Better deploy might be needed.
+
+  docker run \
+    -d \
+    -v ${PWD}/assets:/assets \
+    --net primary \
+    -p 8200:8200 \
+    --name=vault \
+    --hostname=vault \
+    --label tag=${DK_TAG} \
+    --label dc=${DATACENTER} \
+    --cap-add=IPC_LOCK \
+    vault:${VAULT_VERSION} \
+    server -log-level=debug -config=/assets/vault-server-config.hcl > ./logs/vault.log 2>&1
+  
+  log_container_command vault
+
+  sleep 1
+
+  ## Retrieve newly created server IP
+  VAULT_IP=`docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' vault`
+
+  VAULT_ADDR='http://127.0.0.1:8200'
+  
+  ## Initialize Vault server
+  log "Initializing Vault"
+  vault_exec vault $VAULT_ADDR "" "vault operator init -key-shares=1 -key-threshold=1 -format=json" > assets/secrets/vault-init.json
+
+  VAULT_UNSEAL_KEY=`cat assets/secrets/vault-init.json | jq -r '.unseal_keys_b64[0]'`
+  VAULT_TOKEN=`cat assets/secrets/vault-init.json | jq -r '.root_token'`
+
+  ## Unseal Vault server
+  log "Unsealing Vault"
+
+  vault_exec vault $VAULT_ADDR "" "vault operator unseal ${VAULT_UNSEAL_KEY}" > assets/secrets/vault-unseal.log
+
+else
+
+  log "Not starting Vault"
+
+  ## If true uses Vault to generate Consul TLS certificates
+  VAULT_TLS="false"
+
+  ## If true uses Vault as Consul Connect CA
+  VAULT_CONNECT_CA="false"
+
+fi
 
 ########## ------------------------------------------------
 header     "GENERATE DYNAMIC CONFIGURATION"
@@ -452,11 +525,9 @@ log "Generating Consul TLS certificates and gossip key"
 echo "Generate gossip encryption key"
 
 docker exec \
-  -w /assets \
+  -w /assets/secrets \
   operator bash -c \
-    'mkdir -p ./secrets; \
-    cd ./secrets; \
-    echo encrypt = \"$(consul keygen)\" > agent-gossip-encryption.hcl;'
+    'echo encrypt = \"$(consul keygen)\" > agent-gossip-encryption.hcl;'
 
 echo "Generate server certificates and config files"
 
@@ -592,7 +663,7 @@ connect {
   ca_provider = "vault"
   ca_config {
       address = "http://${VAULT_IP}:8200"
-      token = "password"
+      token = "${VAULT_TOKEN}"
       root_pki_path = "connect-root"
       intermediate_pki_path = "connect-intermediate"
       leaf_cert_ttl = "1h"
@@ -692,6 +763,8 @@ op_exec operator ${SERVER_IP}:443 "" \
 
 ## Exports the Bootstrap Token
 export CONSUL_HTTP_TOKEN=`cat ${ASSETS}/secrets/acl-bootstrap.conf | grep SecretID | awk '{print $2}'`
+
+# TODO - Best Practice - Create a new token based on global-management policy
 
 log "Create ACL Policies"
 
